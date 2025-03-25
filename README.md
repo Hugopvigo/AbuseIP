@@ -114,3 +114,8 @@ Ten en cuenta las limitaciones de la API de AbuseIPDB.
 **Thanks to [AbuseIPDB](https://www.abuseipdb.com/) por el increíble servicio!**
 
 **Thanks to [xRuffKez](https://github.com/xRuffKez/) por la idea y la base del script!**
+
+
+<a href="https://www.abuseipdb.com/user/193901" title="AbuseIPDB is an IP address blacklist for webmasters and sysadmins to report IP addresses engaging in abusive behavior on their networks">
+	<img src="https://www.abuseipdb.com/contributor/193901.svg" alt="AbuseIPDB Contributor Badge" style="width: 401px;">
+</a>
