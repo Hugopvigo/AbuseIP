@@ -1,4 +1,6 @@
 #!/bin/bash
+# Author : Hugopvigo - https://hugopvigo.es/
+# Credits: xRuffKez - https://github.com/xRuffKez
 
 API_KEY="your_abuseipdb_api_key"
 CONFIDENCE_MIN=90
