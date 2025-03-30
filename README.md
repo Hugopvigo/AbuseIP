@@ -53,7 +53,7 @@ La mejor opción es programar el script con `cron` para que se ejecute automáti
 
 Para editar tu crontab, usa:
 
-    crontab -e
+    crontab -e o sudo nano /etc/crontab
 
 Monitoreo en Tiempo Real
 Para ver el registro en tiempo real:
