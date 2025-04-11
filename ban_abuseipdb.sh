@@ -54,53 +54,51 @@ extract_ips() {
 
 manage_blocked_ips() {
     log "Gestionando direcciones IP bloqueadas..."
-
-    # Archivo temporal para nuevas IPs que se van a bloquear
     NEW_BLOCKED_IPS="/tmp/updated_blocked_ips.txt"
     touch "$NEW_BLOCKED_IPS"
-
     current_time=$(date +%s)
-    threshold=$((30 * 24 * 60 * 60))  # 30 días en segundos
+    threshold=$((30 * 24 * 60 * 60))
 
-    # Leer IPs actuales si existen
+    # --- Paso 1: Limpiar IPs antiguas ---
     if [ -f "$BLOCKED_IPS_FILE" ]; then
         while IFS= read -r line; do
-            ip=$(echo "$line" | awk '{print $1}')
-            timestamp=$(echo "$line" | awk '{print $2}')
-            age=$(( current_time - timestamp ))
-
-            # Mantener solo las IPs recientes
+            ip_antigua=$(echo "$line" | awk '{print $1}')
+            timestamp_antiguo=$(echo "$line" | awk '{print $2}')
+            age=$(( current_time - timestamp_antiguo ))
             if [ "$age" -lt "$threshold" ]; then
                 echo "$line" >> "$NEW_BLOCKED_IPS"
             else
-                if [[ "$ip" == *:* && "$ENABLE_IPV6" = true ]]; then
-                    ip -6 route del blackhole "$ip" 2>/dev/null && log "Desbloqueado IPv6 $ip"
+                if [[ "$ip_antigua" == *:* && "$ENABLE_IPV6" = true ]]; then
+                    ip -6 route del blackhole "$ip_antigua" 2>/dev/null && log "Desbloqueado IPv6 $ip_antigua"
                 else
-                    ip route del blackhole "$ip" 2>/dev/null && log "Desbloqueado IPv4 $ip"
+                    ip route del blackhole "$ip_antigua" 2>/dev/null && log "Desbloqueado IPv4 $ip_antigua"
                 fi
             fi
         done < "$BLOCKED_IPS_FILE"
+    fi  # <--- Corrección aquí
+
+    # --- Paso 2: Agregar nuevas IPs evitando duplicados ---
+    if [ -f "/tmp/new_ips.txt" ]; then
+        while IFS= read -r ip_nueva; do
+            if ! grep -q "^$ip_nueva " "$NEW_BLOCKED_IPS"; then
+                if [[ "$ip_nueva" == *:* ]]; then
+                    if [ "$ENABLE_IPV6" = true ]; then
+                        ip -6 route add blackhole "$ip_nueva" 2>/dev/null && log "Bloqueado IPv6 $ip_nueva"
+                    else
+                        log "Saltando IPv6 $ip_nueva (IPv6 deshabilitado)"
+                        continue
+                    fi
+                else
+                    ip route add blackhole "$ip_nueva" 2>/dev/null && log "Bloqueado IPv4 $ip_nueva"
+                fi
+                echo "$ip_nueva $current_time" >> "$NEW_BLOCKED_IPS"
+            fi
+        done < "/tmp/new_ips.txt"
     fi
 
-    # Agregar nuevas IPs evitando duplicados
-    while IFS= read -r ip; do
-        if ! grep -q "^$ip " "$NEW_BLOCKED_IPS"; then
-            if [[ "$ip" == *:* ]]; then
-                if [ "$ENABLE_IPV6" = true ]; then
-                    ip -6 route add blackhole "$ip" 2>/dev/null && log "Bloqueado IPv6 $ip"
-                else
-                    log "Saltando IPv6 $ip (IPv6 deshabilitado)"
-                    continue
-                fi
-            else
-                ip route add blackhole "$ip" 2>/dev/null && log "Bloqueado IPv4 $ip"
-            fi
-            echo "$ip $current_time" >> "$NEW_BLOCKED_IPS"
-        fi
-    done < "/tmp/new_ips.txt"
-
-    # Sustituir archivo de IPs bloqueadas
+    # --- Paso 3: Sustituir archivo de IPs bloqueadas ---
     mv "$NEW_BLOCKED_IPS" "$BLOCKED_IPS_FILE"
+    log "Archivo de IPs bloqueadas actualizado."
 }
 
 main() {
