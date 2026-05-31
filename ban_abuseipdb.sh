@@ -1,114 +1,115 @@
 #!/bin/bash
-# Author : Hugopvigo - https://hugopvigo.es/
+# Script: ban_abuseipdb.sh — Bloquea IPs maliciosas via ipset + iptables
+# Author: Hugopvigo - https://hugopvigo.es/
 # Credits: xRuffKez - https://github.com/xRuffKez
 
 API_KEY="your_abuseipdb_api_key"
 CONFIDENCE_MIN=90
 ENABLE_IPV6=true
 FILE="/tmp/abuseipdb_blacklist.json"
-BLOCKED_IPS_FILE="/tmp/blocked_ips.txt"
 LOG_FILE="/var/log/ban_abuseipdb.log"
+IPSET_V4="abuseipdb"
+IPSET_V6="abuseipdb6"
+IPSET_SAVE="/etc/ipset.conf"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
 check_requirements() {
-    command -v jq >/dev/null 2>&1 || { log "jq no encontrado. Instálalo antes de ejecutar el script."; exit 1; }
-    command -v ip >/dev/null 2>&1 || { log "iproute2 no encontrado."; exit 1; }
+    for cmd in jq curl ipset iptables; do
+        command -v "$cmd" >/dev/null 2>&1 || { log "ERROR: $cmd no encontrado."; exit 1; }
+    done
+    [ "$ENABLE_IPV6" = true ] && ! command -v ip6tables >/dev/null 2>&1 && {
+        log "AVISO: ip6tables no encontrado, desactivando IPv6."
+        ENABLE_IPV6=false
+    }
+}
+
+ensure_sets_and_rules() {
+    # Crear sets si no existen (se pierden al reiniciar; el @reboot del cron los restaura)
+    ipset list "$IPSET_V4" >/dev/null 2>&1 || \
+        ipset create "$IPSET_V4" hash:ip hashsize 65536 maxelem 500000 family inet
+
+    if [ "$ENABLE_IPV6" = true ]; then
+        ipset list "$IPSET_V6" >/dev/null 2>&1 || \
+            ipset create "$IPSET_V6" hash:ip hashsize 65536 maxelem 500000 family inet6
+    fi
+
+    # Añadir reglas iptables solo si no existen (idempotente)
+    iptables  -C INPUT   -m set --match-set "$IPSET_V4" src -j DROP 2>/dev/null || \
+        iptables  -I INPUT   -m set --match-set "$IPSET_V4" src -j DROP
+    iptables  -C FORWARD -m set --match-set "$IPSET_V4" src -j DROP 2>/dev/null || \
+        iptables  -I FORWARD -m set --match-set "$IPSET_V4" src -j DROP
+
+    if [ "$ENABLE_IPV6" = true ]; then
+        ip6tables -C INPUT   -m set --match-set "$IPSET_V6" src -j DROP 2>/dev/null || \
+            ip6tables -I INPUT   -m set --match-set "$IPSET_V6" src -j DROP
+        ip6tables -C FORWARD -m set --match-set "$IPSET_V6" src -j DROP 2>/dev/null || \
+            ip6tables -I FORWARD -m set --match-set "$IPSET_V6" src -j DROP
+    fi
 }
 
 fetch_blacklist() {
-    log "Descargando lista de IPs maliciosas..."
+    log "Descargando lista de IPs maliciosas (confianza >= ${CONFIDENCE_MIN}%)..."
     curl -sG https://api.abuseipdb.com/api/v2/blacklist \
         --data-urlencode "confidenceMinimum=$CONFIDENCE_MIN" \
         -H "Key: $API_KEY" \
         -H "Accept: application/json" \
         -o "$FILE"
+    [ $? -ne 0 ] && { log "ERROR: Falló la descarga de la lista."; exit 1; }
 
-    if [ $? -ne 0 ]; then
-        log "Error: Falló la descarga de la lista."
-        exit 1
-    fi
+    jq empty "$FILE" 2>/dev/null || { log "ERROR: JSON descargado inválido."; exit 1; }
 }
 
-validate_json() {
-    jq empty "$FILE" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        log "Error: El archivo JSON descargado no es válido."
-        exit 1
-    fi
-}
+apply_blacklist() {
+    log "Aplicando lista de IPs..."
 
-extract_ips() {
-    log "Extrayendo direcciones IP del JSON..."
-    jq -r '.data[] | .ipAddress' "$FILE" > "/tmp/new_ips.txt"
+    local TMP_V4="${IPSET_V4}_tmp"
+    local TMP_V6="${IPSET_V6}_tmp"
 
-    if [ ! -s "/tmp/new_ips.txt" ]; then
-        log "No se encontraron nuevas IPs."
-        exit 0
+    # Sets temporales para swap atómico (el set activo nunca queda vacío)
+    ipset destroy "$TMP_V4" 2>/dev/null
+    ipset create  "$TMP_V4" hash:ip hashsize 65536 maxelem 500000 family inet
+
+    if [ "$ENABLE_IPV6" = true ]; then
+        ipset destroy "$TMP_V6" 2>/dev/null
+        ipset create  "$TMP_V6" hash:ip hashsize 65536 maxelem 500000 family inet6
     fi
 
-    log "Se extrajeron $(wc -l < /tmp/new_ips.txt) direcciones IP."
-}
+    local count_v4=0 count_v6=0
 
-manage_blocked_ips() {
-    log "Gestionando direcciones IP bloqueadas..."
-    NEW_BLOCKED_IPS="/tmp/updated_blocked_ips.txt"
-    touch "$NEW_BLOCKED_IPS"
-    current_time=$(date +%s)
-    threshold=$((30 * 24 * 60 * 60))
+    while IFS= read -r ip; do
+        if [[ "$ip" == *:* ]]; then
+            [ "$ENABLE_IPV6" = true ] && ipset add "$TMP_V6" "$ip" 2>/dev/null && ((count_v6++))
+        else
+            ipset add "$TMP_V4" "$ip" 2>/dev/null && ((count_v4++))
+        fi
+    done < <(jq -r '.data[].ipAddress' "$FILE")
 
-    # --- Paso 1: Limpiar IPs antiguas ---
-    if [ -f "$BLOCKED_IPS_FILE" ]; then
-        while IFS= read -r line; do
-            ip_antigua=$(echo "$line" | awk '{print $1}')
-            timestamp_antiguo=$(echo "$line" | awk '{print $2}')
-            age=$(( current_time - timestamp_antiguo ))
-            if [ "$age" -lt "$threshold" ]; then
-                echo "$line" >> "$NEW_BLOCKED_IPS"
-            else
-                if [[ "$ip_antigua" == *:* && "$ENABLE_IPV6" = true ]]; then
-                    ip -6 route del blackhole "$ip_antigua" 2>/dev/null && log "Desbloqueado IPv6 $ip_antigua"
-                else
-                    ip route del blackhole "$ip_antigua" 2>/dev/null && log "Desbloqueado IPv4 $ip_antigua"
-                fi
-            fi
-        done < "$BLOCKED_IPS_FILE"
-    fi  # <--- Corrección aquí
+    log "IPs cargadas: $count_v4 IPv4, $count_v6 IPv6"
 
-    # --- Paso 2: Agregar nuevas IPs evitando duplicados ---
-    if [ -f "/tmp/new_ips.txt" ]; then
-        while IFS= read -r ip_nueva; do
-            if ! grep -q "^$ip_nueva " "$NEW_BLOCKED_IPS"; then
-                if [[ "$ip_nueva" == *:* ]]; then
-                    if [ "$ENABLE_IPV6" = true ]; then
-                        ip -6 route add blackhole "$ip_nueva" 2>/dev/null && log "Bloqueado IPv6 $ip_nueva"
-                    else
-                        log "Saltando IPv6 $ip_nueva (IPv6 deshabilitado)"
-                        continue
-                    fi
-                else
-                    ip route add blackhole "$ip_nueva" 2>/dev/null && log "Bloqueado IPv4 $ip_nueva"
-                fi
-                echo "$ip_nueva $current_time" >> "$NEW_BLOCKED_IPS"
-            fi
-        done < "/tmp/new_ips.txt"
+    # Swap atómico y limpieza
+    ipset swap "$TMP_V4" "$IPSET_V4" && ipset destroy "$TMP_V4"
+
+    if [ "$ENABLE_IPV6" = true ]; then
+        ipset swap "$TMP_V6" "$IPSET_V6" && ipset destroy "$TMP_V6"
     fi
 
-    # --- Paso 3: Sustituir archivo de IPs bloqueadas ---
-    mv "$NEW_BLOCKED_IPS" "$BLOCKED_IPS_FILE"
-    log "Archivo de IPs bloqueadas actualizado."
+    # Guardar para restaurar tras reboot (via @reboot en cron)
+    ipset save > "$IPSET_SAVE"
+    log "Sets guardados en $IPSET_SAVE"
 }
 
 main() {
-    log "Script iniciado."
+    log "=== Script iniciado ==="
     check_requirements
+    ensure_sets_and_rules
     fetch_blacklist
-    validate_json
-    extract_ips
-    manage_blocked_ips
-    log "Script finalizado correctamente."
+    apply_blacklist
+    local total
+    total=$(ipset list "$IPSET_V4" | grep "Number of entries" | awk '{print $NF}')
+    log "=== Finalizado. $total IPs IPv4 activas en ipset ==="
 }
 
 main

@@ -1,0 +1,26 @@
+# Variables de entorno y configuración local con credenciales
+.env
+.env.local
+*.env
+
+# Archivos de configuración local (copias del script con API key real)
+*.local.sh
+config.local.*
+
+# Logs
+*.log
+/var/log/
+
+# Archivos temporales del script
+/tmp/abuseipdb_blacklist.json
+/tmp/new_ips.txt
+/tmp/blocked_ips.txt
+
+# Backup de ipset
+ipset.conf
+
+# Editores
+.vscode/
+*.swp
+*.swo
+*~
