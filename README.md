@@ -119,3 +119,19 @@ Ten en cuenta las limitaciones de la API de AbuseIPDB.
 <a href="https://www.abuseipdb.com/user/193901" title="AbuseIPDB is an IP address blacklist for webmasters and sysadmins to report IP addresses engaging in abusive behavior on their networks">
 	<img src="https://www.abuseipdb.com/contributor/193901.svg" alt="AbuseIPDB Contributor Badge" style="width: 401px;">
 </a>
+
+---
+
+## 📄 Licencia
+
+**CC BY-NC-SA 4.0** — Compartir con atribución, sin uso comercial. Consulta [LICENSE](LICENSE) para más detalles.
+
+---
+
+<div align="center">
+
+**Desarrollado por [Hugo Perez-Vigo](https://hugopvigo.es)** · [@hugopvigo](https://x.com/hugopvigo)
+
+[![GitHub](https://img.shields.io/badge/GitHub-Hugopvigo-181717?style=for-the-badge&logo=github)](https://github.com/Hugopvigo)
+
+</div>
